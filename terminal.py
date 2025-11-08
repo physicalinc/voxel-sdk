@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Physical Automation, Inc. All rights reserved.
 """Voxel Device Terminal - thin CLI wrapper around the Voxel SDK."""
 
 import argparse

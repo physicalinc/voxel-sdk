@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Physical Automation, Inc. All rights reserved.
 """BLE transport implementation for Voxel devices using Bleak."""
 
 import asyncio

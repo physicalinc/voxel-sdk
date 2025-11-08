@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Physical Automation, Inc. All rights reserved.
 """Voxel FileSystem interface."""
 
 from abc import ABC, abstractmethod

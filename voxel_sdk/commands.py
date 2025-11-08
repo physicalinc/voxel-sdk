@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Physical Automation, Inc. All rights reserved.
 """Shared command parsing utilities for Voxel device interactions."""
 
 from __future__ import annotations

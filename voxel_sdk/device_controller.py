@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Physical Automation, Inc. All rights reserved.
 """High-level controller that exposes reusable Voxel device operations."""
 
 from __future__ import annotations

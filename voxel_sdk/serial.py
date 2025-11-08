@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Physical Automation, Inc. All rights reserved.
 """Serial transport implementation for Voxel devices."""
 
 import serial
