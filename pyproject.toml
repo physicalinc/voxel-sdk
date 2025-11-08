@@ -10,7 +10,13 @@ authors = [
     {name = "Physical Automation, Inc", email="contact@physical.inc"},
 ]
 license = { file = "LICENSE" }
-dependencies = []
+readme = "README.md"
+dependencies = [
+  "bleak>=0.22.0",
+  "pyserial>=3.5",
+  "opencv-python>=4.8.0",
+  "numpy>=1.23.0",
+]
 requires-python = ">=3.8"
 classifiers = [
     "Development Status :: 3 - Alpha",
