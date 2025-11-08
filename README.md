@@ -17,15 +17,16 @@ Optional (for video conversion): install `ffmpeg` (e.g., `brew install ffmpeg` o
 
 ### 1) Terminal (interactive CLI)
 
-Run the built-in terminal (no separate entry point needed):
+Run the built-in terminal from the repository:
 
 ```bash
-python -m voxel_sdk.terminal
+cd voxel-sdk
+python terminal.py
 ```
 
 - Choose connection:
-  - Wired: select “Wired” or run with flags: `python -m voxel_sdk.terminal --transport serial --port /dev/cu.usbmodem1101`
-  - BLE: select “Bluetooth” or run with flags: `python -m voxel_sdk.terminal --transport ble --ble-name voxel`
+  - Wired: select “Wired” or run with flags: `python terminal.py --transport serial --port /dev/cu.usbmodem1101`
+  - BLE: select “Bluetooth” or run with flags: `python terminal.py --transport ble --ble-name voxel`
 
 Once connected you’ll see a prompt like `voxel>`. A few useful commands:
 
@@ -57,6 +58,7 @@ voxel> stream 9000
 Notes:
 - Stream viewer requires OpenCV + NumPy (installed by default). If you built a minimal env without them, install `opencv-python` and `numpy`.
 - You can stop a remote stream with `stream-stop`.
+- The CLI isn’t currently exposed as a package module. Use `python terminal.py` from the repo (or create your own entrypoint in your app using the SDK).
 
 
 ### 2) Python SDK
