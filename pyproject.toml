@@ -28,3 +28,25 @@ Repository = "https://github.com/voxel-project/voxel-sdk"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voxel_sdk"]
+
+[project.optional-dependencies]
+# Bluetooth Low Energy support
+ble = [
+  "bleak>=0.22.0",
+]
+# Wired serial support
+serial = [
+  "pyserial>=3.5",
+]
+# Local stream visualization (optional; heavier dependencies)
+viz = [
+  "opencv-python>=4.8.0",
+  "numpy>=1.23.0",
+]
+# Convenience extra to install everything
+all = [
+  "bleak>=0.22.0",
+  "pyserial>=3.5",
+  "opencv-python>=4.8.0",
+  "numpy>=1.23.0",
+]
