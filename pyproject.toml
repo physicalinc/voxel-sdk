@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voxel-sdk"
-version = "0.1.0"
+version = "0.1.1"
 description = "SDK for Voxel"
 authors = [
     {name = "Physical Automation, Inc", email="contact@physical.inc"},
