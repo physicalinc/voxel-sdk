@@ -7,8 +7,9 @@ name = "voxel-sdk"
 version = "0.1.0"
 description = "SDK for Voxel"
 authors = [
-    {name = "Physical Automation, Inc"},
+    {name = "Physical Automation, Inc", email="contact@physical.inc"},
 ]
+license = { file = "LICENSE" }
 dependencies = []
 requires-python = ">=3.8"
 classifiers = [
@@ -20,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
 ]
 
 [project.urls]
