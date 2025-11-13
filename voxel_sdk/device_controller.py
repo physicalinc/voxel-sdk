@@ -80,6 +80,8 @@ class DeviceController:
         host: str = "",
         remote_host: Optional[str] = None,
         remote_port: Optional[int] = None,
+        hand_tracking: bool = False,
+        quality: Optional[int] = None,
         window_name: str = "Voxel Stream",
         connect_timeout: float = 5.0,
     ) -> None:
@@ -91,6 +93,8 @@ class DeviceController:
             host=host,
             remote_host=remote_host,
             remote_port=target_port,
+            hand_tracking=hand_tracking,
+            quality=quality,
             window_name=window_name,
             connect_timeout=connect_timeout,
         )

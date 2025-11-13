@@ -14,6 +14,46 @@ except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
     np = None
 
+try:  # Optional dependency for hand pose overlays
+    import mediapipe as mp
+except ImportError:  # pragma: no cover - optional dependency
+    mp = None
+
+
+class HandPoseOverlay:
+    def __init__(self):
+        if mp is None:
+            raise RuntimeError(
+                "Hand tracking requires mediapipe. Install it with `pip install mediapipe`."
+            )
+        self._hands = mp.solutions.hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        self._drawing = mp.solutions.drawing_utils
+        self._connections = mp.solutions.hands.HAND_CONNECTIONS
+
+    def annotate(self, image):
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self._hands.process(image_rgb)
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                self._drawing.draw_landmarks(
+                    image, hand_landmarks, self._connections
+                )
+        return image
+
+    def close(self):
+        self._hands.close()
+
+
+def create_hand_overlay(enable: bool):
+    if not enable:
+        return None
+    return HandPoseOverlay()
+
 
 class VoxelTransport(ABC):
     """Abstract base class for device communication protocols."""
@@ -132,17 +172,32 @@ class VoxelFileSystem:
         data = f"{host}|{count}" if count else host
         return self._send_command("ping_host", data)
 
-    def start_rdmp_stream(self, host: str, port: int = 9000) -> Dict[str, Any]:
-        """Start streaming camera frames to a remote host."""
-        if not host:
+    def start_rdmp_stream(self, host: str, port: int = 9000, quality: Optional[int] = None) -> Dict[str, Any]:
+        """Start streaming camera frames to a remote host.
+
+        :param host: The IP or hostname the device should stream to.
+        :param port: TCP port for the stream (default 9000).
+        :param quality: Optional JPEG quality override (0-63, lower = higher fidelity).
+        """
+        host_value = (host or "").strip()
+        if not host_value:
             raise ValueError("Host cannot be empty")
 
         if port is not None:
             if port <= 0 or port > 65535:
                 raise ValueError("Port must be between 1 and 65535")
-            data = f"{host}|{port}"
-        else:
-            data = host
+        if quality is not None:
+            if quality < 0 or quality > 63:
+                raise ValueError("Quality must be between 0 and 63 (lower is higher fidelity)")
+
+        data = host_value
+        if port is not None:
+            data += f"|{port}"
+        elif quality is not None:
+            # Preserve position for quality when port is omitted
+            data += "|"
+        if quality is not None:
+            data += f"|{quality}"
 
         return self._send_command("rdmp_stream", data)
 
@@ -156,6 +211,8 @@ class VoxelFileSystem:
         host: str = "",
         remote_host: Optional[str] = None,
         remote_port: int = 9000,
+        hand_tracking: bool = False,
+        quality: Optional[int] = None,
         window_name: str = "Voxel Stream",
         connect_timeout: float = 5.0,
     ) -> None:
@@ -169,6 +226,8 @@ class VoxelFileSystem:
             the same as the local listener port).
         :param window_name: OpenCV window title.
         :param connect_timeout: Seconds to wait for the device to connect.
+        :param quality: Optional JPEG quality override (0-63, lower numbers increase fidelity / bandwidth).
+        :param hand_tracking: If True, overlay MediaPipe hand landmarks over each frame.
         """
 
         if not self.is_connected():
@@ -176,6 +235,8 @@ class VoxelFileSystem:
 
         if cv2 is None or np is None:
             raise RuntimeError("OpenCV (cv2) and numpy are required for stream visualization. Install them with `pip install opencv-python numpy`." )
+
+        hand_overlay = create_hand_overlay(hand_tracking)
 
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -186,7 +247,7 @@ class VoxelFileSystem:
         target_host = self._select_stream_target(remote_host, target_port)
 
         # Kick off streaming on device
-        response = self.start_rdmp_stream(target_host, target_port)
+        response = self.start_rdmp_stream(target_host, target_port, quality=quality)
         if "error" in response:
             listener.close()
             raise RuntimeError(f"Device failed to start streaming: {response}")
@@ -232,6 +293,9 @@ class VoxelFileSystem:
                     print("Failed to decode JPEG frame")
                     continue
 
+                if hand_overlay:
+                    hand_overlay.annotate(image)
+
                 cv2.imshow(window_name, image)
                 key = cv2.waitKey(1)
                 if key == 27 or key == ord('q'):
@@ -241,6 +305,8 @@ class VoxelFileSystem:
         finally:
             conn.close()
             cv2.destroyWindow(window_name)
+            if hand_overlay:
+                hand_overlay.close()
             try:
                 self.stop_rdmp_stream()
             except Exception:

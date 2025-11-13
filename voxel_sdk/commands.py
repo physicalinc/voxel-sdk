@@ -144,7 +144,7 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
             ("connectWifi", "<ssid> [password]", "Connect device to WiFi"),
             ("disconnectWifi", "", "Disconnect device from WiFi"),
             ("ping_host", "<host> [count]", "Ping a host from the device"),
-            ("rdmp_stream", "<host> [port]", "Stream MJPEG frames to remote host"),
+            ("rdmp_stream", "<host> [port] [quality] [--hand]", "Stream MJPEG frames to remote host (quality 0-63; add --hand for MediaPipe overlay)"),
             ("rdmp_stop", "", "Stop remote stream"),
         ],
     ),
@@ -207,26 +207,56 @@ def parse_command(command_line: str) -> ParsedCommand:
         return ParsedCommand(action="help")
 
     if cmd == "rdmp_stream":
-        host = parts[1] if len(parts) > 1 else ""
-        port_text = parts[2] if len(parts) > 2 else ""
+        args = parts[1:]
+        hand = False
+        filtered_args = []
+        for arg in args:
+            if arg == "--hand":
+                hand = True
+            else:
+                filtered_args.append(arg)
+        args = filtered_args
+        remote_host: Optional[str] = None
+        port: Optional[int] = None
+        quality: Optional[int] = None
 
-        # Support shorthand: `stream 9000`
-        if not host and port_text:
-            host = ""
-        elif host.isdigit() and not port_text:
-            port_text = host
-            host = ""
+        def _parse_int(value: str, label: str) -> Optional[int]:
+            if value.strip() == "":
+                return None
+            if value.isdigit():
+                return int(value)
+            raise ValueError(f"Invalid {label}")
 
-        port = None
-        if port_text:
-            try:
-                port = int(port_text)
-            except ValueError:
-                return ParsedCommand(action="error", message="Invalid port. Usage: stream <host> [port]")
+        try:
+            if args:
+                first = args[0]
+                if first.isdigit():
+                    port = int(first)
+                    if len(args) > 1:
+                        quality = _parse_int(args[1], "quality")
+                    if len(args) > 2:
+                        raise ValueError("Too many arguments for stream command")
+                else:
+                    remote_host = first
+                    if len(args) > 1:
+                        port = _parse_int(args[1], "port")
+                    if len(args) > 2:
+                        quality = _parse_int(args[2], "quality")
+                    if len(args) > 3:
+                        raise ValueError("Too many arguments for stream command")
+            if port is None:
+                port = 9000
+            if quality is not None and not (0 <= quality <= 63):
+                return ParsedCommand(action="error", message="Quality must be between 0 and 63")
+        except ValueError as exc:
+            return ParsedCommand(
+                action="error",
+                message=f"{exc}. Usage: {command_label('rdmp_stream')} <host> [port] [quality]",
+            )
 
         return ParsedCommand(
             action="stream",
-            params={"remote_host": host or None, "port": port or 9000},
+            params={"remote_host": remote_host, "port": port, "quality": quality, "hand": hand},
         )
 
     if cmd == "rdmp_stop":

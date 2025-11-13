@@ -3,11 +3,12 @@
 """Voxel Device Terminal - thin CLI wrapper around the Voxel SDK."""
 
 import argparse
+import asyncio
 import json
 import os
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, List
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 SDK_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -16,6 +17,97 @@ if SDK_ROOT not in sys.path:
 
 from voxel_sdk.commands import ParsedCommand, generate_help_text, parse_command
 from voxel_sdk.device_controller import DeviceController
+from voxel_sdk.multi_device_controller import MultiDeviceController
+
+try:
+    from voxel_sdk.ble import BleVoxelTransport, BleakScanner
+except Exception:  # pragma: no cover
+    BleVoxelTransport = None  # type: ignore
+    BleakScanner = None  # type: ignore
+
+
+def _run_asyncio_discover(timeout: float = 5.0):
+    if BleakScanner is None:
+        return []
+
+    async def _discover():
+        return await BleakScanner.discover(timeout=timeout)
+
+    try:
+        return asyncio.run(_discover())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(BleakScanner.discover(timeout=timeout))
+        finally:
+            loop.close()
+    except Exception:
+        return []
+
+
+def _select_dual_devices(
+    devices: List[Any],
+    base_prefix: str,
+    left_hint: Optional[str],
+    right_hint: Optional[str],
+) -> Tuple[Optional[Any], Optional[Any]]:
+    def _normalize(value: Optional[str]) -> Optional[str]:
+        return value.lower().strip() if value else None
+
+    base_lower = base_prefix.lower()
+    matches = []
+    for device in devices:
+        name = getattr(device, "name", "") or ""
+        if name and name.lower().startswith(base_lower):
+            matches.append(device)
+
+    if not matches:
+        return None, None
+
+    def _find_device(
+        candidates: List[Any],
+        keywords: List[str],
+        exclude_address: Optional[str] = None,
+    ) -> Optional[Any]:
+        for keyword in keywords:
+            if not keyword:
+                continue
+            keyword = keyword.lower()
+            for device in candidates:
+                name = (getattr(device, "name", "") or "").lower()
+                address = getattr(device, "address", None)
+                if exclude_address and address == exclude_address:
+                    continue
+                if keyword in name:
+                    return device
+        return None
+
+    left_keywords = []
+    right_keywords = []
+
+    left_keywords.append(_normalize(left_hint) or "")
+    right_keywords.append(_normalize(right_hint) or "")
+    left_keywords.extend(
+        [
+            f"{base_lower}-left",
+            f"{base_lower} left",
+            "left",
+            "l",
+        ]
+    )
+    right_keywords.extend(
+        [
+            f"{base_lower}-right",
+            f"{base_lower} right",
+            "right",
+            "r",
+        ]
+    )
+
+    left_device = _find_device(matches, left_keywords)
+    right_device = _find_device(matches, right_keywords, exclude_address=getattr(left_device, "address", None))
+
+    return left_device, right_device
 
 
 def _print_directory_listing(response: Dict[str, Any]) -> None:
@@ -207,22 +299,28 @@ def _handle_parsed_command(
 
     if parsed.action == "device_command" and parsed.device_command:
         response = controller.execute_device_command(parsed.device_command)
-        
-        # Special formatting for WiFi commands
-        if parsed.device_command.startswith("connectWifi:"):
-            if isinstance(response, dict):
-                _format_wifi_response(response)
+
+        if getattr(controller, "is_multi", False):
+            print(json.dumps(response, indent=2))
+        else:
+            # Special formatting for WiFi commands
+            if parsed.device_command.startswith("connectWifi:"):
+                if isinstance(response, dict):
+                    _format_wifi_response(response)
+                else:
+                    print(json.dumps(response, indent=2))
+            elif parsed.device_command == "scanWifi" and isinstance(response, dict):
+                _format_wifi_scan(response)
+            elif parsed.device_command.startswith("list_dir:") and isinstance(response, dict):
+                _print_directory_listing(response)
             else:
                 print(json.dumps(response, indent=2))
-        elif parsed.device_command == "scanWifi" and isinstance(response, dict):
-            _format_wifi_scan(response)
-        elif parsed.device_command.startswith("list_dir:") and isinstance(response, dict):
-            _print_directory_listing(response)
-        else:
-            print(json.dumps(response, indent=2))
         return
 
     if parsed.action == "download_file":
+        if getattr(controller, "is_multi", False):
+            print("⚠️  File downloads are not supported while connected to multiple devices.")
+            return
         path = parsed.params["path"]
         local_filename = parsed.params.get("local_filename") or os.path.basename(path) or "downloaded_file"
         progress_callback = _simple_progress_printer()
@@ -246,6 +344,9 @@ def _handle_parsed_command(
         return
 
     if parsed.action == "download_video":
+        if getattr(controller, "is_multi", False):
+            print("⚠️  Video downloads are not supported while connected to multiple devices.")
+            return
         progress_callback = _simple_progress_printer()
         try:
             summary = controller.download_video(
@@ -281,12 +382,33 @@ def _handle_parsed_command(
     if parsed.action == "stream":
         remote_host = parsed.params.get("remote_host")
         port = parsed.params["port"]
-        print("Starting local stream viewer. Close the window or press 'q' to stop.")
+        quality = parsed.params.get("quality")
+        hand_tracking = parsed.params.get("hand", False)
+        is_multi = getattr(controller, "is_multi", False)
+        if is_multi:
+            label_map = getattr(controller, "device_labels", {})
+            names = ", ".join(f"{label}:{name}" for label, name in label_map.items()) or "devices"
+            print(
+                f"Starting dual stream viewers for {names}. "
+                f"Ports {port}, {port + 1} will be used. Close each window or press 'q' to stop."
+            )
+            if quality is not None:
+                print(f"Requested JPEG quality: {quality} (0=highest fidelity, 63=lowest).")
+            if hand_tracking:
+                print("Hand tracking overlay enabled (MediaPipe).")
+        else:
+            print("Starting local stream viewer. Close the window or press 'q' to stop.")
+            if quality is not None:
+                print(f"Requested device JPEG quality: {quality} (0=highest fidelity, 63=lowest).")
+            if hand_tracking:
+                print("Hand tracking overlay enabled (MediaPipe).")
         try:
             controller.stream_with_visualization(
                 port=port,
                 remote_host=remote_host,
                 remote_port=port,
+                quality=quality,
+                hand_tracking=hand_tracking,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"Stream failed: {exc}")
@@ -334,6 +456,21 @@ def main() -> None:
         default="",
         help="Optional Bluetooth MAC address to connect directly",
     )
+    parser.add_argument(
+        "--ble-left-name",
+        default=None,
+        help="Optional Bluetooth name prefix/keyword for the left unit (defaults to detecting '*left').",
+    )
+    parser.add_argument(
+        "--ble-right-name",
+        default=None,
+        help="Optional Bluetooth name prefix/keyword for the right unit (defaults to detecting '*right').",
+    )
+    parser.add_argument(
+        "--disable-dual",
+        action="store_true",
+        help="Force single-device mode even if left/right Bluetooth devices are detected.",
+    )
     
     args = parser.parse_args()
     
@@ -348,21 +485,77 @@ def main() -> None:
         use_ble = transport_choice == "ble"
     
     transport = None
-    controller: Optional[DeviceController] = None
+    controller: Optional[Any] = None
     prompt_label = "voxel"
     
     try:
         if use_ble:
-            from voxel_sdk.ble import BleVoxelTransport
-
             ble_name = args.ble_name or "voxel"
-            transport = BleVoxelTransport(device_name=ble_name)
-            target_address = args.ble_address or ""
-            if target_address:
-                print(f"Connecting via Bluetooth (address {target_address}, name prefix '{ble_name}')...")
-            else:
-                print(f"Connecting via Bluetooth (scanning for '{ble_name}')...")
-            transport.connect(target_address)
+            if BleVoxelTransport is None:
+                raise RuntimeError("BLE support requires the 'bleak' package. Install voxel-sdk[ble] to enable it.")
+
+            dual_ctrl: Optional[MultiDeviceController] = None
+            left_transport = None
+            right_transport = None
+
+            if (
+                not args.disable_dual
+                and not args.ble_address
+                and BleakScanner is not None
+            ):
+                devices = _run_asyncio_discover()
+                left_device, right_device = _select_dual_devices(
+                    devices,
+                    ble_name,
+                    args.ble_left_name,
+                    args.ble_right_name,
+                )
+                if left_device and right_device:
+                    left_name = getattr(left_device, "name", "") or f"{ble_name}-left"
+                    right_name = getattr(right_device, "name", "") or f"{ble_name}-right"
+                    print(f"Detected '{left_name}' and '{right_name}'. Attempting synchronized connection...")
+                    left_transport = BleVoxelTransport(device_name=left_name)
+                    right_transport = BleVoxelTransport(device_name=right_name)
+                    try:
+                        left_transport.connect(getattr(left_device, "address", ""))
+                        right_transport.connect(getattr(right_device, "address", ""))
+                        left_controller = DeviceController(left_transport)
+                        right_controller = DeviceController(right_transport)
+                        dual_ctrl = MultiDeviceController(
+                            {"left": left_controller, "right": right_controller},
+                            display_names={
+                                "left": getattr(left_device, "name", "") or "left",
+                                "right": getattr(right_device, "name", "") or "right",
+                            },
+                        )
+                        controller = dual_ctrl
+                        prompt_label = "dual"
+                        print("Connected to BLE pair:")
+                        for label, name in dual_ctrl.device_labels.items():
+                            print(f"  {label}: {name}")
+                    except Exception as exc:
+                        print(f"⚠️  Failed to connect to both devices ({exc}). Falling back to single-device mode.")
+                        if left_transport:
+                            try:
+                                left_transport.disconnect()
+                            except Exception:
+                                pass
+                        if right_transport:
+                            try:
+                                right_transport.disconnect()
+                            except Exception:
+                                pass
+                        controller = None
+
+            if controller is None:
+                transport = BleVoxelTransport(device_name=ble_name)
+                target_address = args.ble_address or ""
+                if target_address:
+                    print(f"Connecting via Bluetooth (address {target_address}, name prefix '{ble_name}')...")
+                else:
+                    print(f"Connecting via Bluetooth (scanning for '{ble_name}')...")
+                transport.connect(target_address)
+                controller = DeviceController(transport)
         else:
             from voxel_sdk.serial import SerialVoxelTransport
 
@@ -371,21 +564,40 @@ def main() -> None:
             )
             print(f"Connecting via wired connection on {args.port}...")
             transport.connect()
+            controller = DeviceController(transport)
 
-        controller = DeviceController(transport)
-        try:
-            info = controller.execute_device_command("get_device_name")
-            if isinstance(info, dict):
-                device_name = info.get("device_name")
-                if isinstance(device_name, str) and device_name:
-                    prompt_label = device_name.strip() or "voxel"
-                    print(f"Connected to device '{device_name}'.")
-        except Exception:  # noqa: BLE001
-            prompt_label = "voxel"
-        prompt_label = prompt_label.replace(" ", "-")
+        if controller is None:
+            raise RuntimeError("Failed to establish controller connection.")
+
+        if getattr(controller, "is_multi", False):
+            try:
+                info = controller.execute_device_command("get_device_name")
+                if isinstance(info, dict):
+                    responses = info.get("responses", {})
+                    if isinstance(responses, dict):
+                        for label, payload in responses.items():
+                            if isinstance(payload, dict):
+                                device_name = payload.get("device_name")
+                                if isinstance(device_name, str) and device_name:
+                                    print(f"{label} device name: {device_name}")
+            except Exception:
+                pass
+            prompt_label = "dual"
+        else:
+            try:
+                info = controller.execute_device_command("get_device_name")
+                if isinstance(info, dict):
+                    device_name = info.get("device_name")
+                    if isinstance(device_name, str) and device_name:
+                        prompt_label = device_name.strip() or "voxel"
+                        print(f"Connected to device '{device_name}'.")
+            except Exception:  # noqa: BLE001
+                prompt_label = "voxel"
+
+        prompt_label = (prompt_label or "voxel").replace(" ", "-")
         print("Connected. Type commands and press Enter. Type 'exit' to quit.")
         print(
-            "Examples: ls /, cat /test.txt, connect-wifi MySSID MyPassword, stream 203.0.113.10 9000"
+            "Examples: ls /, cat /test.txt, connect-wifi MySSID MyPassword, stream 203.0.113.10 9000 10 --hand"
         )
         print("-" * 60)
     except Exception as exc:  # noqa: BLE001

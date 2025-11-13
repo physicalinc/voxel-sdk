@@ -52,12 +52,15 @@ voxel> download /photos/myphoto.jpg myphoto.jpg
 - Stream live video to your computer with a local viewer (press `q` to quit):
 
 ```text
-voxel> stream 9000
+voxel> stream 9000 --hand
 ```
 
 Notes:
 - Stream viewer requires OpenCV + NumPy (installed by default). If you built a minimal env without them, install `opencv-python` and `numpy`.
+- Hand pose overlays require `mediapipe` (`pip install mediapipe`). Append `--hand` to enable drawing landmarks over the stream.
 - You can stop a remote stream with `stream-stop`.
+- Optional third argument sets JPEG quality (0-63, lower numbers increase quality and bandwidth), e.g. `voxel> stream 9000 10`. Default is the device setting (4).
+- When two BLE devices are discovered with `-left` and `-right` name suffixes (or custom overrides), the terminal automatically connects to both, executes commands in sync, and returns a combined JSON response. Streams open two viewer windows on consecutive ports (e.g., 9000 and 9001). Use `--disable-dual` to force single-device mode.
 - The CLI isn’t currently exposed as a package module. Use `python terminal.py` from the repo (or create your own entrypoint in your app using the SDK).
 
 
@@ -98,7 +101,7 @@ transport.connect("")
 controller = DeviceController(transport)
 
 # Opens an OpenCV window; press 'q' to quit
-controller.stream_with_visualization(port=9000)
+controller.stream_with_visualization(port=9000, quality=10, hand_tracking=True)
 
 transport.disconnect()
 ```
