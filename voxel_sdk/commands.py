@@ -8,6 +8,9 @@ from typing import Dict, Any, Optional, List, Tuple
 
 
 COMMAND_ALIASES: Dict[str, str] = {
+    "calibrate": "calibrate",
+    "camera_calibrate": "calibrate",
+    "camera-calibrate": "calibrate",
     "card_info": "card_info",
     "cardinfo": "card_info",
     "df": "card_info",
@@ -76,6 +79,7 @@ COMMAND_ALIASES: Dict[str, str] = {
 }
 
 COMMAND_DISPLAY_ALIASES: Dict[str, str] = {
+    "calibrate": "camera-calibrate",
     "card_info": "df",
     "list_dir": "ls",
     "read_file": "cat",
@@ -129,6 +133,7 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
     (
         "Camera",
         [
+            ("calibrate", "[samples] [--left|--right]", "Calibrate camera intrinsics using on-screen pattern"),
             ("camera_status", "", "Get camera status"),
             ("camera_capture", "[dir] [name] [res]", "Capture photo"),
             ("camera_record", "[dir] [name] [res] [fps]", "Start video recording"),
@@ -141,7 +146,7 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
         "Connectivity",
         [
             ("scanWifi", "", "Scan for available WiFi networks"),
-            ("connectWifi", "<ssid> [password]", "Connect device to WiFi"),
+            ("connectWifi", "<ssid> [password]", "Connect device to WiFi (omit password to be prompted securely)"),
             ("disconnectWifi", "", "Disconnect device from WiFi"),
             ("ping_host", "<host> [count]", "Ping a host from the device"),
             ("rdmp_stream", "<host> [port] [quality] [--hand]", "Stream MJPEG frames to remote host (quality 0-63; add --hand for MediaPipe overlay)"),
@@ -203,8 +208,72 @@ def parse_command(command_line: str) -> ParsedCommand:
     original_cmd = parts[0]
     cmd = normalize_command(original_cmd)
 
+    # Global device side flag extraction for dual-device mode
+    side: Optional[str] = None
+    filtered_parts: List[str] = [parts[0]]
+    for arg in parts[1:]:
+        if arg == "--left":
+            if side and side != "left":
+                return ParsedCommand(action="error", message="Specify only one of --left or --right")
+            side = "left"
+        elif arg == "--right":
+            if side and side != "right":
+                return ParsedCommand(action="error", message="Specify only one of --left or --right")
+            side = "right"
+        else:
+            filtered_parts.append(arg)
+    parts = filtered_parts
+
+    def _with_side(pc: ParsedCommand) -> ParsedCommand:
+        if side:
+            # Merge side into params
+            new_params = dict(pc.params) if pc.params else {}
+            new_params["side"] = side
+            pc.params = new_params
+        return pc
+
     if cmd == "help":
-        return ParsedCommand(action="help")
+        return _with_side(ParsedCommand(action="help"))
+
+    if cmd == "calibrate":
+        # Args: [samples] [--left|--right]
+        args = parts[1:]
+        samples = 0
+        side: Optional[str] = None
+        for arg in args:
+            if arg.startswith("--"):
+                if arg == "--left":
+                    if side and side != "left":
+                        return ParsedCommand(action="error", message="Specify only one of --left or --right")
+                    side = "left"
+                elif arg == "--right":
+                    if side and side != "right":
+                        return ParsedCommand(action="error", message="Specify only one of --left or --right")
+                    side = "right"
+                else:
+                    return ParsedCommand(
+                        action="error",
+                        message=f"Unknown flag '{arg}'. Usage: {command_label('calibrate')} [samples] [--left|--right]",
+                    )
+            else:
+                if samples != 0:
+                    return ParsedCommand(
+                        action="error",
+                        message=f"Too many arguments. Usage: {command_label('calibrate')} [samples] [--left|--right]",
+                    )
+                try:
+                    samples = int(arg)
+                except ValueError:
+                    return ParsedCommand(
+                        action="error",
+                        message=f"Invalid samples count. Usage: {command_label('calibrate')} [samples] [--left|--right]",
+                    )
+        params: Dict[str, Any] = {}
+        if samples > 0:
+            params["samples"] = samples
+        if side:
+            params["side"] = side
+        return ParsedCommand(action="calibrate", params=params)
 
     if cmd == "rdmp_stream":
         args = parts[1:]
@@ -254,13 +323,13 @@ def parse_command(command_line: str) -> ParsedCommand:
                 message=f"{exc}. Usage: {command_label('rdmp_stream')} <host> [port] [quality]",
             )
 
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="stream",
             params={"remote_host": remote_host, "port": port, "quality": quality, "hand": hand},
-        )
+        ))
 
     if cmd == "rdmp_stop":
-        return ParsedCommand(action="stream_stop")
+        return _with_side(ParsedCommand(action="stream_stop"))
 
     if cmd == "download_video":
         if len(parts) < 2:
@@ -272,10 +341,10 @@ def parse_command(command_line: str) -> ParsedCommand:
         video_dir = _ensure_leading_slash(parts[1])
         output_file = parts[2] if len(parts) > 2 else None
 
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="download_video",
             params={"video_dir": video_dir, "output": output_file},
-        )
+        ))
 
     if cmd == "download_file":
         if len(parts) < 2:
@@ -289,10 +358,10 @@ def parse_command(command_line: str) -> ParsedCommand:
         if local_filename == ".":
             local_filename = None
 
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="download_file",
             params={"path": device_path, "local_filename": local_filename},
-        )
+        ))
 
     if cmd == "convert_mjpg":
         if len(parts) < 2:
@@ -305,14 +374,14 @@ def parse_command(command_line: str) -> ParsedCommand:
         output_file = parts[2] if len(parts) > 2 else mjpg_file.replace(".mjpg", ".mp4")
         fps = parts[3] if len(parts) > 3 else "30"
 
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="convert_mjpg",
             params={"input_path": mjpg_file, "output_path": output_file, "fps": fps},
-        )
+        ))
 
     if cmd == "list_dir":
         path = _ensure_leading_slash(parts[1] if len(parts) > 1 else "/")
-        return ParsedCommand(action="device_command", device_command=f"list_dir:{path}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"list_dir:{path}"))
 
     if cmd == "write_file":
         if len(parts) < 3:
@@ -322,7 +391,7 @@ def parse_command(command_line: str) -> ParsedCommand:
             )
         path = _ensure_leading_slash(parts[1])
         content = " ".join(parts[2:])
-        return ParsedCommand(action="device_command", device_command=f"write_file:{path}|{content}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"write_file:{path}|{content}"))
 
     if cmd == "append_file":
         if len(parts) < 3:
@@ -332,7 +401,7 @@ def parse_command(command_line: str) -> ParsedCommand:
             )
         path = _ensure_leading_slash(parts[1])
         content = " ".join(parts[2:])
-        return ParsedCommand(action="device_command", device_command=f"append_file:{path}|{content}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"append_file:{path}|{content}"))
 
     if cmd == "read_file":
         if len(parts) < 2:
@@ -341,7 +410,7 @@ def parse_command(command_line: str) -> ParsedCommand:
                 message=f"Usage: {command_label('read_file')} <path>",
             )
         path = _ensure_leading_slash(parts[1])
-        return ParsedCommand(action="device_command", device_command=f"read_file:{path}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"read_file:{path}"))
 
     if cmd == "delete_file":
         if len(parts) < 2:
@@ -349,7 +418,7 @@ def parse_command(command_line: str) -> ParsedCommand:
                 action="error",
                 message=f"Usage: {command_label('delete_file')} <path>",
             )
-        return ParsedCommand(action="device_command", device_command=f"delete_file:{parts[1]}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"delete_file:{parts[1]}"))
 
     if cmd == "file_exists":
         if len(parts) < 2:
@@ -357,7 +426,7 @@ def parse_command(command_line: str) -> ParsedCommand:
                 action="error",
                 message=f"Usage: {command_label('file_exists')} <path>",
             )
-        return ParsedCommand(action="device_command", device_command=f"file_exists:{parts[1]}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"file_exists:{parts[1]}"))
 
     if cmd == "file_size":
         if len(parts) < 2:
@@ -365,7 +434,7 @@ def parse_command(command_line: str) -> ParsedCommand:
                 action="error",
                 message=f"Usage: {command_label('file_size')} <path>",
             )
-        return ParsedCommand(action="device_command", device_command=f"file_size:{parts[1]}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"file_size:{parts[1]}"))
 
     if cmd == "create_dir":
         if len(parts) < 2:
@@ -373,7 +442,7 @@ def parse_command(command_line: str) -> ParsedCommand:
                 action="error",
                 message=f"Usage: {command_label('create_dir')} <path>",
             )
-        return ParsedCommand(action="device_command", device_command=f"create_dir:{parts[1]}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"create_dir:{parts[1]}"))
 
     if cmd == "remove_dir":
         if len(parts) < 2:
@@ -381,7 +450,7 @@ def parse_command(command_line: str) -> ParsedCommand:
                 action="error",
                 message=f"Usage: {command_label('remove_dir')} <path>",
             )
-        return ParsedCommand(action="device_command", device_command=f"remove_dir:{parts[1]}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"remove_dir:{parts[1]}"))
 
     if cmd == "rename_file":
         if len(parts) < 3:
@@ -391,10 +460,10 @@ def parse_command(command_line: str) -> ParsedCommand:
             )
         old_path = parts[1]
         new_path = parts[2]
-        return ParsedCommand(action="device_command", device_command=f"rename_file:{old_path},{new_path}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"rename_file:{old_path},{new_path}"))
 
     if cmd == "card_info":
-        return ParsedCommand(action="device_command", device_command="card_info")
+        return _with_side(ParsedCommand(action="device_command", device_command="card_info"))
 
     if cmd == "connectWifi":
         if len(parts) < 2:
@@ -403,14 +472,17 @@ def parse_command(command_line: str) -> ParsedCommand:
                 message=f"Usage: {command_label('connectWifi')} <ssid> [password]",
             )
         ssid = parts[1]
-        password = " ".join(parts[2:]) if len(parts) > 2 else ""
-        return ParsedCommand(action="device_command", device_command=f"connectWifi:{ssid}|{password}")
+        if len(parts) == 2:
+            # Trigger secure prompt in terminal handler
+            return ParsedCommand(action="connect_wifi_prompt", params={"ssid": ssid})
+        password = " ".join(parts[2:])
+        return _with_side(ParsedCommand(action="device_command", device_command=f"connectWifi:{ssid}|{password}"))
 
     if cmd == "disconnectWifi":
-        return ParsedCommand(action="device_command", device_command="disconnectWifi")
+        return _with_side(ParsedCommand(action="device_command", device_command="disconnectWifi"))
 
     if cmd == "scanWifi":
-        return ParsedCommand(action="device_command", device_command="scanWifi")
+        return _with_side(ParsedCommand(action="device_command", device_command="scanWifi"))
 
     if cmd == "ping_host":
         if len(parts) < 2:
@@ -421,19 +493,19 @@ def parse_command(command_line: str) -> ParsedCommand:
         host = parts[1]
         count = parts[2] if len(parts) > 2 else ""
         data = f"{host}|{count}" if count else host
-        return ParsedCommand(action="device_command", device_command=f"ping_host:{data}")
+        return _with_side(ParsedCommand(action="device_command", device_command=f"ping_host:{data}"))
 
     if cmd == "camera_status":
-        return ParsedCommand(action="device_command", device_command="camera_status")
+        return _with_side(ParsedCommand(action="device_command", device_command="camera_status"))
 
     if cmd == "camera_capture":
         directory = parts[1] if len(parts) > 1 else "/"
         name = parts[2] if len(parts) > 2 else ""
         resolution = parts[3] if len(parts) > 3 else "1600x1200"
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="device_command",
             device_command=f"camera_capture:{directory}|{name}|{resolution}",
-        )
+        ))
 
     if cmd == "camera_record":
         if len(parts) == 1:
@@ -442,31 +514,31 @@ def parse_command(command_line: str) -> ParsedCommand:
         name = parts[2] if len(parts) > 2 else ""
         resolution = parts[3] if len(parts) > 3 else "800x600"
         fps = parts[4] if len(parts) > 4 else "30"
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="device_command",
             device_command=f"camera_record:{directory}|{name}|{resolution}|{fps}",
-        )
+        ))
 
     if cmd == "camera_stop":
-        return ParsedCommand(action="device_command", device_command="camera_stop")
+        return _with_side(ParsedCommand(action="device_command", device_command="camera_stop"))
 
     if cmd == "camera_config":
         resolution = parts[1] if len(parts) > 1 else "1600x1200"
         quality = parts[2] if len(parts) > 2 else "12"
         fmt = parts[3] if len(parts) > 3 else "JPEG"
         fb_count = parts[4] if len(parts) > 4 else "1"
-        return ParsedCommand(
+        return _with_side(ParsedCommand(
             action="device_command",
             device_command=f"camera_config:{resolution}|{quality}|{fmt}|{fb_count}",
-        )
+        ))
 
     if cmd == "camera_reset":
-        return ParsedCommand(action="device_command", device_command="camera_reset")
+        return _with_side(ParsedCommand(action="device_command", device_command="camera_reset"))
 
-    return ParsedCommand(
+    return _with_side(ParsedCommand(
         action="error",
         message=f"Unknown command: {original_cmd}. Type 'help' for available commands.",
-    )
+    ))
 
 
 def generate_help_text() -> str:
@@ -484,6 +556,7 @@ def generate_help_text() -> str:
 
     lines.append("Camera resolutions: 1600x1200, 1280x720, 800x600, 640x480, etc.")
     lines.append("Default FPS: 30 (range: 1-60)")
+    lines.append("Dual mode targeting: append --left or --right to any command to target one device.")
     lines.append("exit, quit, q".ljust(HELP_COLUMN_WIDTH) + "- Exit terminal")
     lines.append("")
     return "\n".join(lines)

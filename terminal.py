@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+import getpass
 from typing import Any, Dict, Optional, Tuple, List
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -18,6 +19,7 @@ if SDK_ROOT not in sys.path:
 from voxel_sdk.commands import ParsedCommand, generate_help_text, parse_command
 from voxel_sdk.device_controller import DeviceController
 from voxel_sdk.multi_device_controller import MultiDeviceController
+from voxel_sdk.calibration import calibrate_and_save, CalibrationResult
 
 try:
     from voxel_sdk.ble import BleVoxelTransport, BleakScanner
@@ -298,12 +300,20 @@ def _handle_parsed_command(
         return
 
     if parsed.action == "device_command" and parsed.device_command:
-        response = controller.execute_device_command(parsed.device_command)
-
-        if getattr(controller, "is_multi", False):
-            print(json.dumps(response, indent=2))
-        else:
-            # Special formatting for WiFi commands
+        side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        is_multi = getattr(controller, "is_multi", False)
+        if is_multi and side in ("left", "right"):
+            # Route to a single device
+            try:
+                sub = controller.get_controller(side)  # type: ignore[attr-defined]
+                if sub is None:
+                    print(f"No '{side}' device is connected.")
+                    return
+                response = sub.execute_device_command(parsed.device_command)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Command failed on {side}: {exc}")
+                return
+            # Pretty print single-device responses
             if parsed.device_command.startswith("connectWifi:"):
                 if isinstance(response, dict):
                     _format_wifi_response(response)
@@ -315,18 +325,45 @@ def _handle_parsed_command(
                 _print_directory_listing(response)
             else:
                 print(json.dumps(response, indent=2))
+        else:
+            response = controller.execute_device_command(parsed.device_command)
+            if getattr(controller, "is_multi", False):
+                print(json.dumps(response, indent=2))
+            else:
+                # Special formatting for WiFi commands
+                if parsed.device_command.startswith("connectWifi:"):
+                    if isinstance(response, dict):
+                        _format_wifi_response(response)
+                    else:
+                        print(json.dumps(response, indent=2))
+                elif parsed.device_command == "scanWifi" and isinstance(response, dict):
+                    _format_wifi_scan(response)
+                elif parsed.device_command.startswith("list_dir:") and isinstance(response, dict):
+                    _print_directory_listing(response)
+                else:
+                    print(json.dumps(response, indent=2))
         return
 
     if parsed.action == "download_file":
-        if getattr(controller, "is_multi", False):
-            print("⚠️  File downloads are not supported while connected to multiple devices.")
+        side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        if getattr(controller, "is_multi", False) and side not in ("left", "right"):
+            print("⚠️  File downloads in dual mode require selecting a side: add --left or --right.")
             return
+        # Select appropriate controller
+        if getattr(controller, "is_multi", False) and side in ("left", "right"):
+            sub = controller.get_controller(side)  # type: ignore[attr-defined]
+            if sub is None:
+                print(f"No '{side}' device is connected.")
+                return
+            active = sub
+        else:
+            active = controller
         path = parsed.params["path"]
         local_filename = parsed.params.get("local_filename") or os.path.basename(path) or "downloaded_file"
         progress_callback = _simple_progress_printer()
         print(f"Downloading {path} -> {local_filename}")
         try:
-            data = controller.download_file(path, progress_callback=progress_callback)
+            data = active.download_file(path, progress_callback=progress_callback)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
             print(f"Download failed: {exc}")
             return
@@ -344,12 +381,21 @@ def _handle_parsed_command(
         return
 
     if parsed.action == "download_video":
-        if getattr(controller, "is_multi", False):
-            print("⚠️  Video downloads are not supported while connected to multiple devices.")
+        side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        if getattr(controller, "is_multi", False) and side not in ("left", "right"):
+            print("⚠️  Video downloads in dual mode require selecting a side: add --left or --right.")
             return
+        if getattr(controller, "is_multi", False) and side in ("left", "right"):
+            sub = controller.get_controller(side)  # type: ignore[attr-defined]
+            if sub is None:
+                print(f"No '{side}' device is connected.")
+                return
+            active = sub
+        else:
+            active = controller
         progress_callback = _simple_progress_printer()
         try:
-            summary = controller.download_video(
+            summary = active.download_video(  # type: ignore[attr-defined]
                 video_dir=parsed.params["video_dir"],
                 output=parsed.params.get("output"),
                 progress_callback=progress_callback,
@@ -360,6 +406,44 @@ def _handle_parsed_command(
             print(f"ffmpeg not found: {exc}")
         except Exception as exc:  # noqa: BLE001
             print(f"Video download failed: {exc}")
+        return
+    
+    if parsed.action == "connect_wifi_prompt":
+        ssid = parsed.params.get("ssid", "") if isinstance(parsed.params, dict) else ""
+        side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        if not ssid:
+            print("SSID is required. Usage: connect-wifi <ssid> [password]")
+            return
+        try:
+            print(f"SSID: {ssid}")
+            password = getpass.getpass("Password (leave blank for open network): ")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Failed to read password: {exc}")
+            return
+        try:
+            device_command = f"connectWifi:{ssid}|{password}"
+            is_multi = getattr(controller, "is_multi", False)
+            if is_multi and side in ("left", "right"):
+                sub = controller.get_controller(side)  # type: ignore[attr-defined]
+                if sub is None:
+                    print(f"No '{side}' device is connected.")
+                    return
+                response = sub.execute_device_command(device_command)
+                if isinstance(response, dict):
+                    _format_wifi_response(response)
+                else:
+                    print(json.dumps(response, indent=2))
+            else:
+                response = controller.execute_device_command(device_command)
+                if getattr(controller, "is_multi", False):
+                    print(json.dumps(response, indent=2))
+                else:
+                    if isinstance(response, dict):
+                        _format_wifi_response(response)
+                    else:
+                        print(json.dumps(response, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            print(f"WiFi connection failed: {exc}")
         return
 
     if parsed.action == "convert_mjpg":
@@ -378,14 +462,80 @@ def _handle_parsed_command(
         else:
             print(f"Conversion failed (code {returncode}): {stderr}")
         return
+    
+    if parsed.action == "calibrate":
+        # Determine requested sample count, if provided
+        samples = int(parsed.params.get("samples", 0)) if isinstance(parsed.params, dict) else 0
+        target_side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        is_multi = getattr(controller, "is_multi", False)
+        try:
+            if is_multi:
+                # Calibrate sequentially for each device (left then right if present)
+                multi: MultiDeviceController = controller  # type: ignore[assignment]
+                labels = list(multi.device_labels.keys())
+                # Prefer left/right order if available
+                ordered = []
+                for key in ("left", "right"):
+                    if key in labels:
+                        ordered.append(key)
+                for lb in labels:
+                    if lb not in ordered:
+                        ordered.append(lb)
+                # Filter to specific side if requested
+                if target_side in ("left", "right"):
+                    ordered = [lb for lb in ordered if lb == target_side]
+                    if not ordered:
+                        print(f"No '{target_side}' device is connected.")
+                        return
+                results: Dict[str, Dict[str, Any]] = {}
+                for lb in ordered:
+                    name = multi.device_labels.get(lb, lb)
+                    sub = multi.get_controller(lb)
+                    if sub is None:
+                        continue
+                    print(f"\n=== Calibrating {lb} ({name}) ===")
+                    print("A full-screen calibration pattern will appear.")
+                    print("Point the camera at the screen from different angles and distances.")
+                    print("It auto-captures; keys: 'p' toggle PiP preview, 'c' capture, 'i' invert grid, 'q' finish.")
+                    print("A small live preview will appear in the bottom-right corner (won't cover the grid).")
+                    result: CalibrationResult = calibrate_and_save(sub, label=lb, requested_samples=samples, start_with_preview=True)
+                    results[lb] = {
+                        "saved_to": result.device_path,
+                        "rms": result.rms,
+                        "image_size": {"w": result.image_size[0], "h": result.image_size[1]},
+                        "timestamp": result.timestamp,
+                    }
+                    print(f"✓ Saved {lb} intrinsics to {result.device_path} (RMS error {result.rms:.4f})")
+                if results:
+                    print("\nCalibration complete:")
+                    print(json.dumps(results, indent=2))
+            else:
+                print("=== Calibrating device ===")
+                print("A full-screen calibration pattern will appear.")
+                print("Point the camera at the screen from different angles and distances.")
+                print("It auto-captures; keys: 'p' toggle PiP preview, 'c' capture, 'i' invert grid, 'q' finish.")
+                print("A small live preview will appear in the bottom-right corner (won't cover the grid).")
+                result: CalibrationResult = calibrate_and_save(controller, requested_samples=samples, start_with_preview=True)
+                summary = {
+                    "saved_to": result.device_path,
+                    "rms": result.rms,
+                    "image_size": {"w": result.image_size[0], "h": result.image_size[1]},
+                    "timestamp": result.timestamp,
+                }
+                print(f"✓ Saved intrinsics to {result.device_path} (RMS error {result.rms:.4f})")
+                print(json.dumps(summary, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Calibration failed: {exc}")
+        return
 
     if parsed.action == "stream":
+        side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
         remote_host = parsed.params.get("remote_host")
         port = parsed.params["port"]
         quality = parsed.params.get("quality")
         hand_tracking = parsed.params.get("hand", False)
         is_multi = getattr(controller, "is_multi", False)
-        if is_multi:
+        if is_multi and side not in ("left", "right"):
             label_map = getattr(controller, "device_labels", {})
             names = ", ".join(f"{label}:{name}" for label, name in label_map.items()) or "devices"
             print(
@@ -397,6 +547,12 @@ def _handle_parsed_command(
             if hand_tracking:
                 print("Hand tracking overlay enabled (MediaPipe).")
         else:
+            if is_multi and side in ("left", "right"):
+                sub = controller.get_controller(side)  # type: ignore[attr-defined]
+                if sub is None:
+                    print(f"No '{side}' device is connected.")
+                    return
+                controller = sub  # type: ignore[assignment]
             print("Starting local stream viewer. Close the window or press 'q' to stop.")
             if quality is not None:
                 print(f"Requested device JPEG quality: {quality} (0=highest fidelity, 63=lowest).")
@@ -415,9 +571,19 @@ def _handle_parsed_command(
         return
 
     if parsed.action == "stream_stop":
+        side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        is_multi = getattr(controller, "is_multi", False)
         try:
-            response = controller.stop_stream()
-            print(json.dumps(response, indent=2))
+            if is_multi and side in ("left", "right"):
+                sub = controller.get_controller(side)  # type: ignore[attr-defined]
+                if sub is None:
+                    print(f"No '{side}' device is connected.")
+                    return
+                response = sub.stop_stream()
+                print(json.dumps(response, indent=2))
+            else:
+                response = controller.stop_stream()
+                print(json.dumps(response, indent=2))
         except Exception as exc:  # noqa: BLE001
             print(f"Failed to stop stream: {exc}")
         return

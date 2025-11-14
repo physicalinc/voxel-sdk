@@ -42,6 +42,16 @@ class MultiDeviceController:
         """Mapping of logical label -> user-friendly name."""
         return {label: entry.name for label, entry in self._controllers.items()}
 
+    @property
+    def controllers(self) -> Dict[str, Any]:
+        """Access underlying controllers by label (e.g., 'left', 'right')."""
+        return {label: entry.controller for label, entry in self._controllers.items()}
+
+    def get_controller(self, label: str) -> Optional[Any]:
+        """Return a single underlying controller by label, or None if not present."""
+        entry = self._controllers.get(label)
+        return entry.controller if entry else None
+
     # --- Helpers ---
     @staticmethod
     def _utc_now_iso() -> str:
