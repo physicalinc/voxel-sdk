@@ -291,6 +291,53 @@ def _format_wifi_response(response: Dict[str, Any]) -> None:
             print(f"   MAC Address: {response['mac']}")
 
 
+def _check_and_prompt_recalibration(controller: DeviceController, label: str = "") -> bool:
+    """Check if calibration exists for a camera side and prompt user if they want to recalibrate.
+    
+    Args:
+        controller: DeviceController instance
+        label: Camera label ("left", "right", or "" for single device)
+    
+    Returns:
+        True if calibration should proceed, False if user declined
+    """
+    # Determine calibration file path
+    filename = "intrinsics.json"
+    if label:
+        filename = f"intrinsics_{label}.json"
+    calib_path = f"/calibration/{filename}"
+    
+    # Check if calibration file exists
+    try:
+        exists_resp = controller.execute_device_command(f"file_exists:{calib_path}")
+        if isinstance(exists_resp, dict) and exists_resp.get("exists"):
+            # Try to read the calibration file to show details
+            try:
+                read_resp = controller.execute_device_command(f"read_file:{calib_path}")
+                if isinstance(read_resp, dict) and "content" in read_resp:
+                    calib_data = json.loads(read_resp["content"])
+                    timestamp = calib_data.get("timestamp", "unknown")
+                    rms = calib_data.get("rms", "unknown")
+                    side_label = f" ({label})" if label else ""
+                    print(f"\n⚠️  Camera{side_label} already has calibration data:")
+                    print(f"   Timestamp: {timestamp}")
+                    print(f"   RMS error: {rms}")
+            except Exception:
+                pass
+            
+            # Prompt user
+            side_label = f" for {label} camera" if label else ""
+            response = input(f"\nRecalibrate{side_label}? (y/N): ").strip().lower()
+            if response not in ("y", "yes"):
+                print("Skipping calibration.")
+                return False
+    except Exception:
+        # If we can't check, proceed anyway (device might be unreachable or file system error)
+        pass
+    
+    return True
+
+
 def _handle_parsed_command(
     controller: DeviceController,
     parsed: ParsedCommand,
@@ -493,6 +540,11 @@ def _handle_parsed_command(
                     sub = multi.get_controller(lb)
                     if sub is None:
                         continue
+                    
+                    # Check if calibration exists and prompt user
+                    if not _check_and_prompt_recalibration(sub, label=lb):
+                        continue
+                    
                     print(f"\n=== Calibrating {lb} ({name}) ===")
                     print("A full-screen calibration pattern will appear.")
                     print("Point the camera at the screen from different angles and distances.")
@@ -510,6 +562,10 @@ def _handle_parsed_command(
                     print("\nCalibration complete:")
                     print(json.dumps(results, indent=2))
             else:
+                # Check if calibration exists and prompt user
+                if not _check_and_prompt_recalibration(controller):
+                    return
+                
                 print("=== Calibrating device ===")
                 print("A full-screen calibration pattern will appear.")
                 print("Point the camera at the screen from different angles and distances.")
@@ -525,7 +581,14 @@ def _handle_parsed_command(
                 print(f"✓ Saved intrinsics to {result.device_path} (RMS error {result.rms:.4f})")
                 print(json.dumps(summary, indent=2))
         except Exception as exc:  # noqa: BLE001
-            print(f"Calibration failed: {exc}")
+            error_msg = str(exc)
+            # For multi-line error messages (like TimeoutError), print each line
+            if "\n" in error_msg:
+                print("Calibration failed:")
+                for line in error_msg.split("\n"):
+                    print(f"  {line}")
+            else:
+                print(f"Calibration failed: {error_msg}")
         return
 
     if parsed.action == "calibration_info":

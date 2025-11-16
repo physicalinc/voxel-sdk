@@ -65,6 +65,10 @@ COMMAND_ALIASES: Dict[str, str] = {
     "camera_stop": "camera_stop",
     "camera_config": "camera_config",
     "camera_reset": "camera_reset",
+    "imu_capture": "imu_capture",
+    "imu_stream": "imu_stream",
+    "imu_stop": "imu_stop",
+    "imu_status": "imu_status",
     "connectwifi": "connectWifi",
     "connect_wifi": "connectWifi",
     "wifi_connect": "connectWifi",
@@ -107,6 +111,10 @@ COMMAND_DISPLAY_ALIASES: Dict[str, str] = {
     "camera_stop": "camera-stop",
     "camera_config": "camera-config",
     "camera_reset": "camera-reset",
+    "imu_capture": "imu-capture",
+    "imu_stream": "imu-stream",
+    "imu_stop": "imu-stop",
+    "imu_status": "imu-status",
     "connectWifi": "connect-wifi",
     "disconnectWifi": "disconnect-wifi",
     "scanWifi": "scan-wifi",
@@ -145,6 +153,15 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
             ("camera_stop", "", "Stop video recording"),
             ("camera_config", "[res] [quality] [format] [fb_count]", "Configure camera"),
             ("camera_reset", "", "Reset camera"),
+        ],
+    ),
+        (
+        "IMU",
+        [
+            ("imu_capture", "[--save] [dir] [name]", "Capture single IMU sample (returns JSON; use --save to write to file)"),
+            ("imu_stream", "<host> [port]", "Stream IMU data to remote host"),
+            ("imu_stop", "", "Stop IMU streaming"),
+            ("imu_status", "", "Get IMU status"),
         ],
     ),
     (
@@ -562,6 +579,54 @@ def parse_command(command_line: str) -> ParsedCommand:
 
     if cmd == "camera_reset":
         return _with_side(ParsedCommand(action="device_command", device_command="camera_reset"))
+
+    if cmd == "imu_capture":
+        # Parse: [--save] [directory] [name]
+        # If --save is present, save to file, otherwise just return JSON
+        args = parts[1:]
+        save_flag = False
+        directory = "/"
+        name = ""
+        
+        filtered_args = []
+        for arg in args:
+            if arg == "--save":
+                save_flag = True
+            else:
+                filtered_args.append(arg)
+        
+        if save_flag:
+            # If saving, parse directory and name
+            if len(filtered_args) > 0:
+                directory = filtered_args[0]
+            if len(filtered_args) > 1:
+                name = filtered_args[1]
+            device_command = f"imu_capture:--save|{directory}|{name}" if name else f"imu_capture:--save|{directory}"
+        else:
+            # Just return JSON, no save
+            device_command = "imu_capture"
+        
+        return _with_side(ParsedCommand(
+            action="device_command",
+            device_command=device_command,
+        ))
+
+    if cmd == "imu_stream":
+        if len(parts) < 2:
+            return ParsedCommand(
+                action="error",
+                message=f"Usage: {command_label('imu_stream')} <host> [port]",
+            )
+        host = parts[1]
+        port = parts[2] if len(parts) > 2 else ""
+        data = f"{host}|{port}" if port else host
+        return _with_side(ParsedCommand(action="device_command", device_command=f"imu_stream:{data}"))
+
+    if cmd == "imu_stop":
+        return _with_side(ParsedCommand(action="device_command", device_command="imu_stop"))
+
+    if cmd == "imu_status":
+        return _with_side(ParsedCommand(action="device_command", device_command="imu_status"))
 
     return _with_side(ParsedCommand(
         action="error",

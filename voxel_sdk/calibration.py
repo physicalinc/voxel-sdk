@@ -196,11 +196,26 @@ def calibrate_and_save(
 
 	# Ask device to connect back
 	target_host = _choose_local_ip()
+	print(f"[calibrate] Device will connect to {target_host}:{port}")
+	
+	# Optional: Test connectivity first (non-blocking, just for diagnostics)
+	try:
+		ping_resp = filesystem.ping_host(target_host, count=1)
+		if isinstance(ping_resp, dict) and ping_resp.get("status") != "success":
+			print(f"[calibrate] Warning: Device ping to {target_host} failed - connectivity may be an issue")
+	except Exception:
+		# Ping not critical, continue anyway
+		pass
+	
 	response = filesystem.start_rdmp_stream(target_host, port, quality=None)
 	if isinstance(response, dict) and "error" in response:
 		listener.close()
 		cv2.destroyWindow(target_window)
-		raise RuntimeError(f"Device failed to start streaming: {response}")
+		raise RuntimeError(
+			f"Device failed to start streaming: {response}\n"
+			f"Device tried to connect to {target_host}:{port} but connection failed.\n"
+			f"Check that the device can reach this IP address on your network."
+		)
 
 	# Non-blocking accept loop that continues to refresh the UI to avoid gray screen
 	listener.settimeout(0.1)
@@ -235,7 +250,15 @@ def calibrate_and_save(
 					filesystem.stop_rdmp_stream()
 				except Exception:
 					pass
-				raise TimeoutError("Timed out waiting for device to connect for calibration stream")
+				raise TimeoutError(
+					f"Timed out waiting for device to connect for calibration stream.\n"
+					f"Device was told to connect to {target_host}:{port} but never connected.\n"
+					f"Possible issues:\n"
+					f"  1. macOS Firewall is blocking incoming connections - check System Settings > Network > Firewall\n"
+					f"  2. Device and computer are on different networks/subnets\n"
+					f"  3. Device cannot reach IP address {target_host}\n"
+					f"Try: ping {target_host} from another device on the same network to verify reachability."
+				)
 		except Exception:
 			# Any other accept error: clean up and raise
 			listener.close()

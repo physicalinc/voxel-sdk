@@ -218,3 +218,41 @@ class DeviceController:
 
         return result.returncode, result.stderr.strip()
 
+    def imu_capture(self, save: bool = False, directory: str = "/", name: str = "") -> Dict[str, Any]:
+        """Capture a single IMU sample. Returns JSON data.
+        
+        Args:
+            save: If True, save the sample to a file on the device
+            directory: Directory to save to (only used if save=True)
+            name: Filename to save as (only used if save=True)
+        
+        Returns:
+            Dictionary with status and data fields. If save=True, also includes path.
+        """
+        self.ensure_connected()
+        if save:
+            device_command = f"imu_capture:--save|{directory}|{name}" if name else f"imu_capture:--save|{directory}"
+        else:
+            device_command = "imu_capture"
+        return self.execute_device_command(device_command)
+
+    def imu_status(self) -> Dict[str, Any]:
+        """Get IMU status and latest sample info."""
+        self.ensure_connected()
+        return self.execute_device_command("imu_status")
+
+    def imu_stream_start(
+        self,
+        host: str,
+        port: int = 9001,
+    ) -> Dict[str, Any]:
+        """Start streaming IMU data to a remote host."""
+        self.ensure_connected()
+        device_command = f"imu_stream:{host}|{port}"
+        return self.execute_device_command(device_command)
+
+    def imu_stream_stop(self) -> Dict[str, Any]:
+        """Stop IMU streaming if active."""
+        self.ensure_connected()
+        return self.execute_device_command("imu_stop")
+
