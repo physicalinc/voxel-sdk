@@ -37,114 +37,6 @@ def _load_calibration(controller: Any, label: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _render_3d_hand(
-    points_3d: List[Optional[Tuple[float, float, float]]],
-    width: int = 640,
-    height: int = 480,
-) -> "np.ndarray":
-    """Render 3D hand points in a 2D visualization window (XY view with Z as color)."""
-    if np is None or cv2 is None:
-        return np.zeros((height, width, 3), dtype=np.uint8)
-    
-    # Create blank canvas
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
-    
-    # Filter valid points
-    valid_points = [(i, p) for i, p in enumerate(points_3d) if p is not None]
-    if not valid_points:
-        return canvas
-    
-    # Extract coordinates
-    coords = np.array([p for _, p in valid_points])
-    
-    # Normalize coordinates to fit in view
-    if len(coords) > 0:
-        # Center and scale
-        center = coords.mean(axis=0)
-        coords_centered = coords - center
-        
-        # Scale to fit (assuming reasonable range)
-        max_dist = np.abs(coords_centered).max()
-        if max_dist > 0:
-            scale = min(width, height) * 0.35 / max_dist
-            coords_scaled = coords_centered * scale
-        
-        # Project to 2D (XY view, Z as depth)
-        origin_x = width // 2
-        origin_y = height // 2
-        
-        # Draw axes
-        axis_len = 50
-        cv2.line(canvas, (origin_x, origin_y), (origin_x + axis_len, origin_y), (0, 0, 255), 2)  # X axis (red)
-        cv2.line(canvas, (origin_x, origin_y), (origin_x, origin_y - axis_len), (0, 255, 0), 2)  # Y axis (green)
-        cv2.putText(canvas, "X", (origin_x + axis_len + 5, origin_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-        cv2.putText(canvas, "Y", (origin_x, origin_y - axis_len - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(canvas, "Z (depth)", (origin_x - 60, origin_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Draw hand connections (MediaPipe hand connections)
-        connections = [
-            (0, 1), (1, 2), (2, 3), (3, 4),  # Thumb
-            (0, 5), (5, 6), (6, 7), (7, 8),  # Index
-            (0, 9), (9, 10), (10, 11), (11, 12),  # Middle
-            (0, 13), (13, 14), (14, 15), (15, 16),  # Ring
-            (0, 17), (17, 18), (18, 19), (19, 20),  # Pinky
-            (5, 9), (9, 13), (13, 17),  # Palm
-        ]
-        
-        # Map indices to valid points
-        idx_map = {valid_points[i][0]: i for i in range(len(valid_points))}
-        
-        for start_idx, end_idx in connections:
-            if start_idx in idx_map and end_idx in idx_map:
-                start_2d = coords_scaled[idx_map[start_idx]]
-                end_2d = coords_scaled[idx_map[end_idx]]
-                
-                x1 = int(origin_x + start_2d[0])
-                y1 = int(origin_y - start_2d[1])  # Flip Y for screen coordinates
-                x2 = int(origin_x + end_2d[0])
-                y2 = int(origin_y - end_2d[1])
-                
-                # Color by depth (Z) - closer = brighter
-                z1 = coords[idx_map[start_idx]][2]
-                z2 = coords[idx_map[end_idx]][2]
-                avg_z = (z1 + z2) / 2.0
-                # Normalize depth (assume 200-1000mm range)
-                depth_norm = max(0.0, min(1.0, (avg_z - 200) / 800.0))
-                depth_color = int(255 * (1.0 - depth_norm))
-                depth_color = max(50, min(255, depth_color))
-                
-                cv2.line(canvas, (x1, y1), (x2, y2), (depth_color, depth_color, 255), 2)
-        
-        # Draw points
-        for i, (orig_idx, coord) in enumerate(valid_points):
-            pt_2d = coords_scaled[i]
-            x = int(origin_x + pt_2d[0])
-            y = int(origin_y - pt_2d[1])
-            z = coord[2]
-            
-            # Color by depth
-            depth_norm = max(0.0, min(1.0, (z - 200) / 800.0))
-            depth_color = int(255 * (1.0 - depth_norm))
-            depth_color = max(50, min(255, depth_color))
-            
-            cv2.circle(canvas, (x, y), 5, (depth_color, depth_color, 255), -1)
-            cv2.circle(canvas, (x, y), 5, (255, 255, 255), 1)
-            
-            # Label key points
-            if orig_idx in [4, 8, 12, 16, 20]:  # Finger tips
-                labels = {4: "Thumb", 8: "Index", 12: "Middle", 16: "Ring", 20: "Pinky"}
-                label = labels.get(orig_idx, "")
-                cv2.putText(canvas, label, (x + 6, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        
-        # Show depth info
-        if len(valid_points) > 8 and points_3d[8] is not None:
-            idx_tip = points_3d[8]
-            info_text = f"Index Tip: Z={idx_tip[2]:.1f}mm"
-            cv2.putText(canvas, info_text, (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    
-    return canvas
-
-
 def _stereo_triangulate(
     point_left: Tuple[float, float],
     point_right: Tuple[float, float],
@@ -345,11 +237,8 @@ class MultiDeviceController:
                 else:
                     K_matrices[label] = None
             has_all_calibrations = all(K is not None for K in K_matrices.values())
-            if not has_all_calibrations:
-                print("⚠️  Warning: Calibration data not found for both cameras. 3D triangulation disabled.")
-                print("   Run 'calibrate' on both devices to enable 3D hand tracking.")
-            else:
-                print("✓ Calibration data loaded for both cameras. 3D hand tracking enabled.")
+            if has_all_calibrations:
+                print("✓ Calibration data loaded for both cameras. 3D computation enabled.")
 
         try:
             # Step 1: Prepare listeners and start device streams
@@ -381,7 +270,7 @@ class MultiDeviceController:
                 conn.settimeout(5.0)
                 queue: Queue[Any] = Queue(maxsize=2)
                 landmarks_queue: Queue[Any] = Queue(maxsize=2) if hand_tracking else None
-                frame_buffer: deque = deque(maxsize=5) if (hand_tracking and len(self._controllers) == 2) else None
+                frame_buffer: deque = deque(maxlen=5) if (hand_tracking and len(self._controllers) == 2) else None
                 window = f"{window_name} ({entry.name})"
                 connections[entry.label] = {
                     "entry": entry,
@@ -479,10 +368,6 @@ class MultiDeviceController:
 
             for info in connections.values():
                 cv2.namedWindow(info["window"], cv2.WINDOW_NORMAL)
-            
-            # Create 3D visualization window if hand tracking enabled
-            if hand_tracking and len(self._controllers) == 2:
-                cv2.namedWindow("3D Hand Visualization", cv2.WINDOW_NORMAL)
 
             # Step 3: Display loop on main thread with stereo triangulation
             while not stop_event.is_set():
@@ -606,13 +491,9 @@ class MultiDeviceController:
                                 pt_3d = _stereo_triangulate(pt_left, pt_right, K_left, K_right)
                                 points_3d.append(pt_3d)
                             
-                            # Render 3D visualization
+                            # Display coordinates on frames (index finger tip is landmark 8)
                             valid_3d_points = [p for p in points_3d if p is not None]
                             if len(valid_3d_points) > 0:
-                                viz_3d = _render_3d_hand(points_3d)
-                                cv2.imshow("3D Hand Visualization", viz_3d)
-                                
-                                # Display coordinates on frames (index finger tip is landmark 8)
                                 if len(valid_3d_points) > 8 and points_3d[8] is not None:
                                     idx_tip = points_3d[8]  # Index finger tip
                                     x, y, z = idx_tip
