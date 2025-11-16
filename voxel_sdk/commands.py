@@ -11,6 +11,9 @@ COMMAND_ALIASES: Dict[str, str] = {
     "calibrate": "calibrate",
     "camera_calibrate": "calibrate",
     "camera-calibrate": "calibrate",
+    "calibration_info": "calibration_info",
+    "calibration": "calibration_info",
+    "get_calibration": "calibration_info",
     "card_info": "card_info",
     "cardinfo": "card_info",
     "df": "card_info",
@@ -80,6 +83,7 @@ COMMAND_ALIASES: Dict[str, str] = {
 
 COMMAND_DISPLAY_ALIASES: Dict[str, str] = {
     "calibrate": "camera-calibrate",
+    "calibration_info": "calibration",
     "card_info": "df",
     "list_dir": "ls",
     "read_file": "cat",
@@ -134,6 +138,7 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
         "Camera",
         [
             ("calibrate", "[samples] [--left|--right]", "Calibrate camera intrinsics using on-screen pattern"),
+            ("calibration_info", "[--left|--right]", "Get stored camera calibration data"),
             ("camera_status", "", "Get camera status"),
             ("camera_capture", "[dir] [name] [res]", "Capture photo"),
             ("camera_record", "[dir] [name] [res] [fps]", "Start video recording"),
@@ -274,6 +279,29 @@ def parse_command(command_line: str) -> ParsedCommand:
         if side:
             params["side"] = side
         return ParsedCommand(action="calibrate", params=params)
+
+    if cmd == "calibration_info":
+        # Args: [--left|--right]
+        args = parts[1:]
+        side: Optional[str] = None
+        for arg in args:
+            if arg == "--left":
+                if side and side != "left":
+                    return ParsedCommand(action="error", message="Specify only one of --left or --right")
+                side = "left"
+            elif arg == "--right":
+                if side and side != "right":
+                    return ParsedCommand(action="error", message="Specify only one of --left or --right")
+                side = "right"
+            else:
+                return ParsedCommand(
+                    action="error",
+                    message=f"Unknown argument '{arg}'. Usage: {command_label('calibration_info')} [--left|--right]",
+                )
+        params: Dict[str, Any] = {}
+        if side:
+            params["side"] = side
+        return ParsedCommand(action="calibration_info", params=params)
 
     if cmd == "rdmp_stream":
         args = parts[1:]

@@ -528,6 +528,123 @@ def _handle_parsed_command(
             print(f"Calibration failed: {exc}")
         return
 
+    if parsed.action == "calibration_info":
+        target_side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
+        is_multi = getattr(controller, "is_multi", False)
+        try:
+            if is_multi:
+                multi: MultiDeviceController = controller  # type: ignore[assignment]
+                labels = list(multi.device_labels.keys())
+                # Filter to specific side if requested
+                if target_side in ("left", "right"):
+                    labels = [lb for lb in labels if lb == target_side]
+                    if not labels:
+                        print(f"No '{target_side}' device is connected.")
+                        return
+                # Prefer left/right order
+                ordered = []
+                for key in ("left", "right"):
+                    if key in labels:
+                        ordered.append(key)
+                for lb in labels:
+                    if lb not in ordered:
+                        ordered.append(lb)
+                
+                results: Dict[str, Dict[str, Any]] = {}
+                for lb in ordered:
+                    name = multi.device_labels.get(lb, lb)
+                    sub = multi.get_controller(lb)
+                    if sub is None:
+                        continue
+                    filename = f"intrinsics_{lb}.json" if lb in ("left", "right") else "intrinsics.json"
+                    calib_path = f"/calibration/{filename}"
+                    try:
+                        # Check if file exists
+                        exists_resp = sub.execute_device_command(f"file_exists:{calib_path}")
+                        if isinstance(exists_resp, dict) and exists_resp.get("exists"):
+                            # Read the file
+                            read_resp = sub.execute_device_command(f"read_file:{calib_path}")
+                            if isinstance(read_resp, dict) and "content" in read_resp:
+                                calib_data = json.loads(read_resp["content"])
+                                results[lb] = {
+                                    "device": name,
+                                    "path": calib_path,
+                                    "image_width": calib_data.get("image_width"),
+                                    "image_height": calib_data.get("image_height"),
+                                    "rms": calib_data.get("rms"),
+                                    "samples": calib_data.get("samples"),
+                                    "timestamp": calib_data.get("timestamp"),
+                                    "camera_matrix": calib_data.get("camera_matrix"),
+                                    "dist_coeffs": calib_data.get("dist_coeffs"),
+                                }
+                            else:
+                                results[lb] = {"device": name, "error": "Failed to read calibration file"}
+                        else:
+                            results[lb] = {"device": name, "error": "Calibration not found. Run 'calibrate' first."}
+                    except Exception as exc:  # noqa: BLE001
+                        results[lb] = {"device": name, "error": f"Error reading calibration: {exc}"}
+                
+                # Display results
+                if len(results) == 1:
+                    # Single device result
+                    lb = list(results.keys())[0]
+                    data = results[lb]
+                    if "error" in data:
+                        print(f"{data['device']}: {data['error']}")
+                    else:
+                        # Show full JSON content
+                        calib_json = {
+                            "label": lb,
+                            "image_width": data['image_width'],
+                            "image_height": data['image_height'],
+                            "camera_matrix": data['camera_matrix'],
+                            "dist_coeffs": data['dist_coeffs'],
+                            "rms": data['rms'],
+                            "samples": data['samples'],
+                            "timestamp": data['timestamp'],
+                            "type": "voxel_intrinsics_v1",
+                        }
+                        print(json.dumps(calib_json, indent=2))
+                else:
+                    # Multiple devices - show as object with device labels
+                    output = {}
+                    for lb, data in results.items():
+                        if "error" in data:
+                            output[lb] = {"error": data['error']}
+                        else:
+                            output[lb] = {
+                                "label": lb,
+                                "image_width": data['image_width'],
+                                "image_height": data['image_height'],
+                                "camera_matrix": data['camera_matrix'],
+                                "dist_coeffs": data['dist_coeffs'],
+                                "rms": data['rms'],
+                                "samples": data['samples'],
+                                "timestamp": data['timestamp'],
+                                "type": "voxel_intrinsics_v1",
+                            }
+                    print(json.dumps(output, indent=2))
+            else:
+                # Single device mode
+                calib_path = "/calibration/intrinsics.json"
+                try:
+                    exists_resp = controller.execute_device_command(f"file_exists:{calib_path}")
+                    if isinstance(exists_resp, dict) and exists_resp.get("exists"):
+                        read_resp = controller.execute_device_command(f"read_file:{calib_path}")
+                        if isinstance(read_resp, dict) and "content" in read_resp:
+                            # Parse and display the full JSON content
+                            calib_data = json.loads(read_resp["content"])
+                            print(json.dumps(calib_data, indent=2))
+                        else:
+                            print("Error: Failed to read calibration file.")
+                    else:
+                        print("Calibration not found. Run 'calibrate' to create calibration data.")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Error reading calibration: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Failed to retrieve calibration info: {exc}")
+        return
+
     if parsed.action == "stream":
         side = parsed.params.get("side") if isinstance(parsed.params, dict) else None
         remote_host = parsed.params.get("remote_host")

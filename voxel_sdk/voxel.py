@@ -45,6 +45,28 @@ class HandPoseOverlay:
                 )
         return image
 
+    def process(self, image):
+        """Process image and return hand landmarks data."""
+        if np is None or cv2 is None:
+            return None
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self._hands.process(image_rgb)
+        if not results.multi_hand_landmarks:
+            return None
+        
+        h, w = image.shape[:2]
+        landmarks_data = []
+        for hand_landmarks in results.multi_hand_landmarks:
+            # Convert normalized coordinates to pixel coordinates
+            points = []
+            for landmark in hand_landmarks.landmark:
+                x = int(landmark.x * w)
+                y = int(landmark.y * h)
+                z = landmark.z  # Relative depth (normalized)
+                points.append((x, y, z))
+            landmarks_data.append(points)
+        return landmarks_data
+
     def close(self):
         self._hands.close()
 

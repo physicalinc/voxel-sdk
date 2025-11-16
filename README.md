@@ -55,8 +55,29 @@ voxel> download /photos/myphoto.jpg myphoto.jpg
 voxel> stream 9000 --hand
 ```
 
+- Calibrate camera intrinsics using an on-screen chessboard pattern:
+
+```text
+voxel> calibrate
+voxel> calibrate 20  # Request 20 samples (default: 15)
+voxel> calibrate --left  # Calibrate only the left device (dual mode)
+```
+
+The calibration command displays a full-screen chessboard pattern, streams frames from the device, automatically captures samples from different viewpoints, and saves the calibration data to `/calibration/intrinsics.json` on the device. Interactive controls:
+- `p`: Toggle picture-in-picture preview
+- `c`: Manually capture a sample
+- `i`: Invert the chessboard pattern
+- `q`: Finish calibration
+
+- View stored calibration data:
+
+```text
+voxel> calibration-info
+voxel> calibration-info --left  # View left device calibration (dual mode)
+```
+
 Notes:
-- Stream viewer requires OpenCV + NumPy (installed by default). If you built a minimal env without them, install `opencv-python` and `numpy`.
+- Stream viewer and calibration require OpenCV + NumPy (installed by default). If you built a minimal env without them, install `opencv-python` and `numpy`.
 - Hand pose overlays require `mediapipe` (`pip install mediapipe`). Append `--hand` to enable drawing landmarks over the stream.
 - You can stop a remote stream with `stream-stop`.
 - Optional third argument sets JPEG quality (0-63, lower numbers increase quality and bandwidth), e.g. `voxel> stream 9000 10`. Default is the device setting (4).
