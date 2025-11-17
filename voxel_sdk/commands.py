@@ -81,6 +81,9 @@ COMMAND_ALIASES: Dict[str, str] = {
     "listwifi": "scanWifi",
     "list_wifi": "scanWifi",
     "wifi_list": "scanWifi",
+    "wifi_status": "wifiStatus",
+    "wifi-status": "wifiStatus",
+    "status_wifi": "wifiStatus",
     "help": "help",
     "?": "help",
 }
@@ -118,6 +121,7 @@ COMMAND_DISPLAY_ALIASES: Dict[str, str] = {
     "connectWifi": "connect-wifi",
     "disconnectWifi": "disconnect-wifi",
     "scanWifi": "scan-wifi",
+    "wifiStatus": "wifi-status",
     "help": "?",
 }
 
@@ -170,6 +174,7 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
             ("scanWifi", "", "Scan for available WiFi networks"),
             ("connectWifi", "<ssid> [password]", "Connect device to WiFi (omit password to be prompted securely)"),
             ("disconnectWifi", "", "Disconnect device from WiFi"),
+            ("wifiStatus", "", "Show current WiFi connection details"),
             ("ping_host", "<host> [count]", "Ping a host from the device"),
             ("rdmp_stream", "<host> [port] [quality] [--hand]", "Stream MJPEG frames to remote host (quality 0-63; add --hand for MediaPipe overlay)"),
             ("rdmp_stop", "", "Stop remote stream"),
@@ -528,6 +533,9 @@ def parse_command(command_line: str) -> ParsedCommand:
 
     if cmd == "scanWifi":
         return _with_side(ParsedCommand(action="device_command", device_command="scanWifi"))
+
+    if cmd == "wifiStatus":
+        return _with_side(ParsedCommand(action="device_command", device_command="wifiStatus"))
 
     if cmd == "ping_host":
         if len(parts) < 2:

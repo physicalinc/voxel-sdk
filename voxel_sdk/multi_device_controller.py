@@ -267,10 +267,11 @@ class MultiDeviceController:
                 finally:
                     listener.close()
 
-                conn.settimeout(5.0)
-                queue: Queue[Any] = Queue(maxsize=2)
-                landmarks_queue: Queue[Any] = Queue(maxsize=2) if hand_tracking else None
-                frame_buffer: deque = deque(maxlen=5) if (hand_tracking and len(self._controllers) == 2) else None
+                conn.settimeout(None)  # Blocking reads - let TCP handle buffering
+                # Larger queues to prevent blocking - allow up to 10 frames per stream
+                queue: Queue[Any] = Queue(maxsize=10)
+                landmarks_queue: Queue[Any] = Queue(maxsize=10) if hand_tracking else None
+                frame_buffer: deque = deque(maxlen=10) if (hand_tracking and len(self._controllers) == 2) else None
                 window = f"{window_name} ({entry.name})"
                 connections[entry.label] = {
                     "entry": entry,
@@ -286,15 +287,22 @@ class MultiDeviceController:
 
             # Step 2: Launch reader threads (decode in background, display in main thread)
             def recv_exact(sock: socket.socket, length: int) -> Optional[bytes]:
+                """Efficiently receive exact number of bytes without timeout delays."""
                 data = bytearray()
                 while len(data) < length and not stop_event.is_set():
                     try:
                         chunk = sock.recv(length - len(data))
+                        if not chunk:
+                            return None
+                        data.extend(chunk)
                     except socket.timeout:
+                        # Should not happen with blocking socket, but handle gracefully
+                        if stop_event.is_set():
+                            return None
                         continue
-                    if not chunk:
+                    except OSError:
+                        # Connection closed or error
                         return None
-                    data.extend(chunk)
                 if stop_event.is_set():
                     return None
                 return bytes(data)
@@ -303,6 +311,7 @@ class MultiDeviceController:
                 conn = info["conn"]
                 queue = info["queue"]
                 landmarks_queue = info.get("landmarks_queue")
+                frame_buffer = info.get("frame_buffer")
                 filesystem = info["filesystem"]
                 entry = info["entry"]
                 hand_overlay = None
@@ -335,15 +344,23 @@ class MultiDeviceController:
                                 landmarks_data = hand_overlay.process(image)
                             hand_overlay.annotate(image)
                         
+                        # Non-blocking put - drop frame if queue is full to prevent slowdown
+                        # This ensures reader threads never block waiting for main thread
                         try:
-                            queue.put(image, timeout=0.1)
-                            if landmarks_queue is not None:
-                                landmarks_queue.put(landmarks_data, timeout=0.1)
-                            # Store timestamped frame+landmarks for synchronization
-                            if frame_buffer is not None:
-                                frame_buffer.append((time.time(), image, landmarks_data))
+                            queue.put_nowait(image)
                         except Exception:
+                            # Queue full - drop this frame to maintain throughput
                             pass
+                        
+                        if landmarks_queue is not None:
+                            try:
+                                landmarks_queue.put_nowait(landmarks_data)
+                            except Exception:
+                                pass
+                        
+                        # Store timestamped frame+landmarks for synchronization
+                        if frame_buffer is not None:
+                            frame_buffer.append((time.time(), image, landmarks_data))
                 except Exception as exc:  # noqa: BLE001
                     errors[device_label] = str(exc)
                 finally:
@@ -375,90 +392,88 @@ class MultiDeviceController:
                 landmarks_dict: Dict[str, Any] = {}
                 
                 # Collect synchronized frames and landmarks from all devices
+                # Optimized: Use queues directly for better performance, only use buffers for sync when needed
                 if hand_tracking and len(self._controllers) == 2 and all(info.get("frame_buffer") for info in connections.values()):
-                    # Use frame buffers for synchronization
-                    synced_data: Dict[str, Tuple[float, Any, Any]] = {}
-                    for label, info in connections.items():
-                        frame_buffer = info.get("frame_buffer")
-                        if frame_buffer and len(frame_buffer) > 0:
-                            # Get most recent frame
-                            synced_data[label] = frame_buffer[-1]
-                    
-                    # If we have both frames, check if they're close in time (within 50ms)
-                    if len(synced_data) == 2 and "left" in synced_data and "right" in synced_data:
-                        left_time, left_frame, left_landmarks = synced_data["left"]
-                        right_time, right_frame, right_landmarks = synced_data["right"]
-                        time_diff = abs(left_time - right_time)
-                        
-                        if time_diff < 0.05:  # Within 50ms - good sync
-                            frames["left"] = left_frame
-                            frames["right"] = right_frame
-                            landmarks_dict["left"] = left_landmarks
-                            landmarks_dict["right"] = right_landmarks
-                        else:
-                            # Try to find better matching frames
-                            best_match_diff = float('inf')
-                            best_left = None
-                            best_right = None
-                            
-                            left_buffer = connections["left"].get("frame_buffer", deque())
-                            right_buffer = connections["right"].get("frame_buffer", deque())
-                            
-                            for left_item in left_buffer:
-                                for right_item in right_buffer:
-                                    diff = abs(left_item[0] - right_item[0])
-                                    if diff < best_match_diff and diff < 0.1:  # Within 100ms
-                                        best_match_diff = diff
-                                        best_left = left_item
-                                        best_right = right_item
-                            
-                            if best_left and best_right:
-                                frames["left"] = best_left[1]
-                                frames["right"] = best_right[1]
-                                landmarks_dict["left"] = best_left[2]
-                                landmarks_dict["right"] = best_right[2]
-                            else:
-                                # Fall back to most recent
-                                frames["left"] = left_frame
-                                frames["right"] = right_frame
-                                landmarks_dict["left"] = left_landmarks
-                                landmarks_dict["right"] = right_landmarks
-                    else:
-                        # Fall back to regular queue method
-                        for label, info in connections.items():
-                            queue = info["queue"]
-                            try:
-                                frame = queue.get(timeout=0.01)
-                                if frame is None:
-                                    stop_event.set()
-                                    break
-                                frames[label] = frame
-                                
-                                if info.get("landmarks_queue"):
-                                    try:
-                                        landmarks = info["landmarks_queue"].get(timeout=0.01)
-                                        landmarks_dict[label] = landmarks
-                                    except Empty:
-                                        landmarks_dict[label] = None
-                            except Empty:
-                                continue
-                else:
-                    # Regular collection for single device or no hand tracking
+                    # Fast path: Try to get frames from queues first (most recent)
                     for label, info in connections.items():
                         queue = info["queue"]
                         try:
-                            frame = queue.get(timeout=0.01)
-                            if frame is None:
-                                stop_event.set()
-                                break
-                            frames[label] = frame
-                            
-                            if hand_tracking and info.get("landmarks_queue"):
+                            # Get the most recent frame (drain queue to get latest)
+                            frame = None
+                            while True:
                                 try:
-                                    landmarks = info["landmarks_queue"].get(timeout=0.01)
-                                    landmarks_dict[label] = landmarks
+                                    frame = queue.get_nowait()
+                                    if frame is None:
+                                        stop_event.set()
+                                        break
                                 except Empty:
-                                    landmarks_dict[label] = None
+                                    break
+                            if frame is not None:
+                                frames[label] = frame
+                                
+                                if info.get("landmarks_queue"):
+                                    landmarks = None
+                                    try:
+                                        # Get most recent landmarks
+                                        while True:
+                                            try:
+                                                landmarks = info["landmarks_queue"].get_nowait()
+                                            except Empty:
+                                                break
+                                        landmarks_dict[label] = landmarks
+                                    except Empty:
+                                        landmarks_dict[label] = None
+                        except Empty:
+                            pass
+                    
+                    # If we have both frames, use frame buffers for synchronization only if needed
+                    if len(frames) == 2 and "left" in frames and "right" in frames:
+                        # Check if frames from buffers are better synchronized
+                        left_buffer = connections["left"].get("frame_buffer", deque())
+                        right_buffer = connections["right"].get("frame_buffer", deque())
+                        
+                        if len(left_buffer) > 0 and len(right_buffer) > 0:
+                            # Quick check: use most recent frames if they're close enough
+                            left_latest = left_buffer[-1]
+                            right_latest = right_buffer[-1]
+                            time_diff = abs(left_latest[0] - right_latest[0])
+                            
+                            if time_diff < 0.1:  # Within 100ms - use buffer frames for better sync
+                                frames["left"] = left_latest[1]
+                                frames["right"] = right_latest[1]
+                                landmarks_dict["left"] = left_latest[2]
+                                landmarks_dict["right"] = right_latest[2]
+                else:
+                    # Regular collection for single device or no hand tracking - optimized
+                    for label, info in connections.items():
+                        queue = info["queue"]
+                        try:
+                            # Get most recent frame (drain to get latest)
+                            frame = None
+                            while True:
+                                try:
+                                    frame = queue.get_nowait()
+                                    if frame is None:
+                                        stop_event.set()
+                                        break
+                                except Empty:
+                                    break
+                            
+                            if frame is not None:
+                                frames[label] = frame
+                                
+                                if hand_tracking and info.get("landmarks_queue"):
+                                    landmarks = None
+                                    try:
+                                        # Get most recent landmarks
+                                        while True:
+                                            try:
+                                                landmarks = info["landmarks_queue"].get_nowait()
+                                            except Empty:
+                                                break
+                                        landmarks_dict[label] = landmarks
+                                    except Empty:
+                                        landmarks_dict[label] = None
                         except Empty:
                             continue
                 
@@ -544,14 +559,18 @@ class MultiDeviceController:
                                         cv2.LINE_AA,
                                     )
                 
-                # Display all frames
-                for label, frame in frames.items():
-                    cv2.imshow(connections[label]["window"], frame)
-
-                key = cv2.waitKey(1)
-                if key in (27, ord("q")):
-                    stop_event.set()
-                    break
+                # Display all frames (only if we have frames to show)
+                if frames:
+                    for label, frame in frames.items():
+                        cv2.imshow(connections[label]["window"], frame)
+                    
+                    key = cv2.waitKey(1)
+                    if key in (27, ord("q")):
+                        stop_event.set()
+                        break
+                else:
+                    # No frames available - small delay to prevent CPU spinning
+                    time.sleep(0.001)
 
             for thread in threads:
                 thread.join(timeout=1.0)

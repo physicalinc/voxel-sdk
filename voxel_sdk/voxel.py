@@ -2,10 +2,11 @@
 """Voxel FileSystem interface."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import json
 import socket
 import struct
+import ipaddress
 
 try:  # Optional dependencies for visualization
     import cv2
@@ -185,6 +186,10 @@ class VoxelFileSystem:
         """Disconnect the device from WiFi."""
         return self._send_command("disconnectWifi")
 
+    def get_wifi_status(self) -> Dict[str, Any]:
+        """Retrieve current WiFi connection status."""
+        return self._send_command("wifiStatus")
+    
     def ping_host(self, host: str, count: int = 4) -> Dict[str, Any]:
         """Ping a host from the device."""
         if not host:
@@ -349,15 +354,73 @@ class VoxelFileSystem:
         if remote_host and remote_host.strip():
             return remote_host.strip()
 
-        # Attempt to discover a usable local IP address
-        def valid(ip: str) -> bool:
-            return ip and not ip.startswith("127.") and ip != "0.0.0.0"
+        def _is_valid(ip: Optional[str]) -> bool:
+            return bool(ip) and not ip.startswith("127.") and ip != "0.0.0.0"
 
+        def _gather_local_ipv4_addresses() -> List[str]:
+            addresses: Set[str] = set()
+            hostname = socket.gethostname()
+            try:
+                infos = socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_DGRAM)
+                for info in infos:
+                    addr = info[4][0]
+                    if _is_valid(addr):
+                        addresses.add(addr)
+            except Exception:
+                pass
+            try:
+                direct = socket.gethostbyname(hostname)
+                if _is_valid(direct):
+                    addresses.add(direct)
+            except Exception:
+                pass
+            try:
+                import psutil  # type: ignore
+
+                for iface_addrs in psutil.net_if_addrs().values():
+                    for iface in iface_addrs:
+                        if getattr(iface, "family", None) == socket.AF_INET:
+                            addr = getattr(iface, "address", None)
+                            if _is_valid(addr):
+                                addresses.add(addr)
+            except Exception:
+                pass
+            return list(addresses)
+
+        def _device_network() -> Optional[ipaddress.IPv4Network]:
+            try:
+                status = self.get_wifi_status()
+            except Exception:
+                return None
+            if not isinstance(status, dict):
+                return None
+            if status.get("connected") is not True:
+                return None
+            ip_value = status.get("ip")
+            subnet = status.get("subnet")
+            if not ip_value or not subnet:
+                return None
+            try:
+                return ipaddress.IPv4Network(f"{ip_value}/{subnet}", strict=False)
+            except Exception:
+                return None
+
+        local_addresses = _gather_local_ipv4_addresses()
+        network = _device_network()
+        if network:
+            for candidate in local_addresses:
+                try:
+                    if ipaddress.IPv4Address(candidate) in network:
+                        return candidate
+                except Exception:
+                    continue
+
+        # Fallback to previous heuristics if no matching interface was found
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as temp:
                 temp.connect(("8.8.8.8", 80))
                 candidate = temp.getsockname()[0]
-                if valid(candidate):
+                if _is_valid(candidate):
                     return candidate
         except Exception:
             pass
@@ -365,7 +428,7 @@ class VoxelFileSystem:
         try:
             hostname_ips = socket.gethostbyname_ex(socket.gethostname())[2]
             for ip in hostname_ips:
-                if valid(ip):
+                if _is_valid(ip):
                     return ip
         except Exception:
             pass
