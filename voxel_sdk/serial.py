@@ -6,7 +6,7 @@ import json
 import time
 import base64
 from typing import Dict, Any, Optional
-from .voxel import VoxelTransport
+from voxel_sdk.voxel import VoxelTransport
 
 
 class SerialVoxelTransport(VoxelTransport):

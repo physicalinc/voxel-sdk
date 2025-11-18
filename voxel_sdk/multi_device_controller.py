@@ -12,7 +12,7 @@ import socket
 import struct
 from queue import Queue, Empty
 
-from .voxel import cv2, np, create_hand_overlay
+from voxel_sdk.voxel import cv2, np, create_hand_overlay
 
 
 @dataclass

@@ -10,8 +10,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Any, Tuple
 
-from .voxel import VoxelFileSystem, VoxelTransport
-from .commands import split_device_command
+from voxel_sdk.voxel import VoxelFileSystem, VoxelTransport
+from voxel_sdk.commands import split_device_command
 
 ProgressCallback = Optional[Callable[[int, str], None]]
 

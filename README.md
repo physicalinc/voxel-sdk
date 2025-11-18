@@ -132,12 +132,35 @@ Tips:
 - If you’re unsure of the saved image filename, run `ls /photos` in the terminal first, then use that path in `download`/`download_file`.
 
 
+### 3) IMU head pose visualizer
+
+Start a web server with a real-time 3D head pose visualization driven by the device's IMU (requires Flask).
+
+```bash
+python -m voxel_sdk.imu_headpose_visualizer --transport serial --port /dev/tty.usbserial-1410
+```
+
+The server starts on `http://localhost:5000` by default. Open this URL in your browser to see the interactive 3D visualization with:
+- Real-time head orientation tracking
+- Euler angle display (roll, pitch, yaw)
+- Motion trail showing head movement history
+- Directional indicators (forward, up, left)
+
+Useful flags:
+- `--web-port 8080` – change the web server port (default: 5000)
+- `--gyro-weight 0.95` – tweak complementary filter weighting
+- `--transport ble --ble-name voxel` – connect over Bluetooth
+
+Press <kbd>Ctrl+C</kbd> in the terminal to stop the server.
+
+
 ## Extras
 
 - Default install already includes these. Extras exist only if you want a minimal/custom install:
   - `ble`: Bluetooth Low Energy (via `bleak`)
   - `serial`: Wired serial (via `pyserial`)
-  - `viz`: Local viewer for streaming (via `opencv-python`, `numpy`)
+  - `viz`: Stream visualization utilities (via `opencv-python`, `numpy`)
+  - `web-viz`: Web-based IMU visualization (via `flask`, `flask-cors`, `numpy`)
   - `all`: Installs all of the above
 
 

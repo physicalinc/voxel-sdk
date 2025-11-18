@@ -51,10 +51,18 @@ viz = [
   "opencv-python>=4.8.0",
   "numpy>=1.23.0",
 ]
+# Web-based IMU visualization
+web-viz = [
+  "flask>=2.3.0",
+  "flask-cors>=4.0.0",
+  "numpy>=1.23.0",
+]
 # Convenience extra to install everything
 all = [
   "bleak>=0.22.0",
   "pyserial>=3.5",
   "opencv-python>=4.8.0",
   "numpy>=1.23.0",
+  "flask>=2.3.0",
+  "flask-cors>=4.0.0",
 ]

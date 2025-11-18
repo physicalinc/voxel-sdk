@@ -7,7 +7,7 @@ import json
 import threading
 from typing import Dict, Any, Optional
 
-from .voxel import VoxelTransport
+from voxel_sdk.voxel import VoxelTransport
 
 try:
     from bleak import BleakClient, BleakScanner
