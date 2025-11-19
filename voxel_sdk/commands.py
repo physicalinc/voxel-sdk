@@ -172,7 +172,7 @@ HELP_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
         "Connectivity",
         [
             ("scanWifi", "", "Scan for available WiFi networks"),
-            ("connectWifi", "<ssid> [password]", "Connect device to WiFi (omit password to be prompted securely)"),
+            ("connectWifi", "<ssid> [password]", "Connect device to WiFi (use quotes for SSIDs with spaces, e.g., 'My Network' password)"),
             ("disconnectWifi", "", "Disconnect device from WiFi"),
             ("wifiStatus", "", "Show current WiFi connection details"),
             ("ping_host", "<host> [count]", "Ping a host from the device"),
@@ -226,16 +226,77 @@ def split_device_command(command: str) -> Tuple[str, Optional[str]]:
     return command, None
 
 
+def parse_quoted_args(text: str) -> List[str]:
+    """Parse command line arguments, handling quoted strings.
+    
+    Supports both single and double quotes. Escaped quotes within strings are preserved.
+    Examples:
+        'My Network' password -> ['My Network', 'password']
+        "Founders Guest" blueprint -> ['Founders Guest', 'blueprint']
+        'Network\'s Name' pass -> ['Network's Name', 'pass']
+    """
+    parts: List[str] = []
+    current = []
+    in_quotes = None
+    i = 0
+    
+    while i < len(text):
+        char = text[i]
+        
+        if char == '\\' and i + 1 < len(text):
+            # Handle escaped characters
+            next_char = text[i + 1]
+            if next_char in ('"', "'", '\\'):
+                current.append(next_char)
+                i += 2
+                continue
+            # If backslash doesn't escape anything special, include it as-is
+            current.append(char)
+            i += 1
+            continue
+        
+        if char in ('"', "'"):
+            if in_quotes is None:
+                # Start of quoted string
+                in_quotes = char
+            elif in_quotes == char:
+                # End of quoted string
+                in_quotes = None
+            else:
+                # Different quote type inside string - treat as literal
+                current.append(char)
+        elif char == ' ' and in_quotes is None:
+            # Space outside quotes - end current argument
+            if current:
+                parts.append(''.join(current))
+                current = []
+        else:
+            current.append(char)
+        
+        i += 1
+    
+    # Add final argument
+    if current:
+        parts.append(''.join(current))
+    
+    return parts
+
+
 def parse_command(command_line: str) -> ParsedCommand:
     stripped = command_line.strip()
     if not stripped:
         return ParsedCommand(action="noop")
 
-    parts = stripped.split()
+    # Parse arguments with quoted string support
+    parts = parse_quoted_args(stripped)
+    if not parts:
+        return ParsedCommand(action="noop")
+    
     original_cmd = parts[0]
     cmd = normalize_command(original_cmd)
 
     # Global device side flag extraction for dual-device mode
+    # Extract side flags before processing other arguments
     side: Optional[str] = None
     filtered_parts: List[str] = [parts[0]]
     for arg in parts[1:]:
@@ -519,12 +580,13 @@ def parse_command(command_line: str) -> ParsedCommand:
         if len(parts) < 2:
             return ParsedCommand(
                 action="error",
-                message=f"Usage: {command_label('connectWifi')} <ssid> [password]",
+                message=f"Usage: {command_label('connectWifi')} <ssid> [password] (use quotes for SSIDs with spaces, e.g., 'My Network' password)",
             )
         ssid = parts[1]
         if len(parts) == 2:
             # Trigger secure prompt in terminal handler
             return ParsedCommand(action="connect_wifi_prompt", params={"ssid": ssid})
+        # Join remaining parts for password (in case password also has spaces)
         password = " ".join(parts[2:])
         return _with_side(ParsedCommand(action="device_command", device_command=f"connectWifi:{ssid}|{password}"))
 
